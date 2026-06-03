@@ -80,17 +80,19 @@ VS Code Notebooks, with no network or API calls.
 md(r"""
 ## 1. Setup & Imports
 
-We rely on four standard libraries — all pre-installed in Google Colab and most
-data-science environments. If any are missing (e.g. a bare Python install),
-uncomment the `pip install` line in the cell below.
+We rely on three external libraries plus a few Python standard-library helpers.
+The external libraries are pre-installed in Google Colab and most data-science
+environments. If any are missing (e.g. a bare Python install), uncomment the
+`pip install` line in the cell below.
 
 | Library | Role in this notebook |
 |---|---|
 | **numpy** | Random number generation — specifically Poisson sampling for scorelines, and the master random seed for reproducibility. |
-| **pandas** | Reads the team data from `data/teams.csv`, builds the final summary table, and exports it to CSV. |
+| **pandas** | Reads `data/teams.csv` and `data/annex_c.csv`, builds the final summary table, and exports it to CSV. |
 | **matplotlib** | Draws the bracket heatmap and saves it as a PNG. |
 | **random** | Python's built-in module, used for the simple coin-flip-style draws (match outcome thresholds and penalty shootouts). |
 | **os** | Python's built-in module, used only to locate the `data/teams.csv` file. |
+| **itertools** | Python's built-in module, used to identify the correct Annexe C option. |
 
 ### The one knob you control: `N_RUNS`
 
@@ -115,6 +117,7 @@ code(r"""
 
 import os
 import random
+from itertools import combinations
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -135,10 +138,11 @@ print(f"Configured to run the tournament {N_RUNS:,} times.")
 # Team Data
 # ===========================================================================
 md(r"""
-## 2. Team Data — Elo ratings
+## 2. Team Data — official field, draw, and ratings
 
-To make the simulation realistic, each team needs a **strength number**. We use
-**Elo ratings**.
+The simulator now uses the confirmed **2026 FIFA World Cup field and group draw**.
+The match model still needs a strength number for each team, so `data/teams.csv`
+stores an illustrative **Elo rating** alongside each team's official group slot.
 
 ### What is an Elo rating?
 Elo is a rating system originally built for chess and now widely used for
@@ -166,90 +170,139 @@ answer exactly that question — which is what a simulation needs on *every* mat
 Elo also reacts to every result (who you beat, by how much, how surprising it
 was), and its method is public and reproducible (*eloratings.net*).
 
-**A caveat.** The ratings are **approximate, illustrative values** for a plausible
-48-team field — not the official live numbers. Swap in better ones for better
-answers.
+**A caveat.** The field and draw are real, but the Elo ratings are still
+**approximate, illustrative values**. Swap in better ratings for better answers.
+The `fifa_rank` column is only used as the last group-stage tiebreaker, matching
+FIFA's Article 13 procedure after football results and team conduct cannot split
+teams.
 
 ### Where the data lives
-The ratings are **not hardcoded in this notebook**. They are loaded from an
-external file so the data is cleanly separated from the logic:
+The tournament data is **not hardcoded in this notebook**. It is loaded from the
+`data/` folder so the data is cleanly separated from the logic:
 
 ```
 your-folder/
 ├── WorldCup2026_MonteCarlo.ipynb   <- this notebook
 └── data/
-    └── teams.csv                   <- team,elo  (48 rows)
+    ├── teams.csv                   <- team, elo, fifa_rank, group, position
+    └── annex_c.csv                 <- FIFA's 495 third-place bracket routings
 ```
 
-To change the field, just edit `data/teams.csv` in any spreadsheet app — no code
-changes needed. You can add more teams, remove some, or plug in a different Elo
-snapshot; the simulation adapts automatically.
+To experiment, edit the `elo` numbers in `data/teams.csv`. Keep exactly 48 teams
+and one official position from `A1` through `L4` unless you also intend to change
+the tournament format code.
 
 > **Running in Google Colab or elsewhere?** Because the data is a separate file,
 > it must sit beside the notebook. Colab's VM won't have your local `data/`
-> folder, so first either **upload `teams.csv`** into a `data` folder via the
-> Files panel, **mount Google Drive**, or point `load_teams()` at wherever you
-> put the file. If the file can't be found, the cell below raises a clear error
-> telling you exactly what to do.
+> folder, so first either **upload the full `data/` folder** via the Files panel,
+> **mount Google Drive**, or point the loaders at wherever you put the files.
+> If a file can't be found, the cell below raises a clear error.
 
-`load_teams()` reads the CSV and returns a dictionary mapping
-**team name → Elo rating**.
+`load_team_data()` reads the team CSV and returns Elo ratings, FIFA-ranking
+tiebreakers, and the official groups. `load_annex_c()` reads FIFA's third-place
+bracket routing table.
 """)
 
 code(r"""
 # Folder holding the external data files, relative to this notebook.
 DATA_DIR = "data"
+GROUP_ORDER = list("ABCDEFGHIJKL")
+GROUP_MATCH_PAIRINGS = [(0, 1), (2, 3), (0, 2), (3, 1), (3, 0), (1, 2)]
+ANNEX_COLUMNS = ["1A", "1B", "1D", "1E", "1G", "1I", "1K", "1L"]
 
 
-def load_teams(path=None):
-    '''Load {team_name: elo_rating} for all teams from data/teams.csv.
+def load_team_data(path=None):
+    '''Load teams, ratings, FIFA-rank tiebreakers, and official group positions.
 
-    The CSV must have two columns: `team` and `elo`. Edit that file to change
-    the field — no code changes required. Pass `path=` to read from elsewhere.
+    The CSV must contain 48 unique teams with one official slot from A1 through L4.
+    Edit `elo` to change the strength assumptions; keep group/position unless you
+    are intentionally changing the official draw.
     '''
     path = path or os.path.join(DATA_DIR, "teams.csv")
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Could not find '{path}'.\n"
             f"Keep the 'data/' folder next to this notebook. In Google Colab, "
-            f"upload teams.csv into a 'data' folder via the Files panel, mount "
-            f"Google Drive, or call load_teams(path='/your/path/teams.csv')."
+            f"upload the full data folder, mount Google Drive, or call "
+            f"load_team_data(path='/your/path/teams.csv')."
         )
     df = pd.read_csv(path)
-    expected = {"team", "elo"}
+    expected = {"team", "elo", "fifa_rank", "group", "position"}
     if not expected.issubset(df.columns):
         raise ValueError(
             f"'{path}' must contain columns {sorted(expected)}; "
             f"found {list(df.columns)}."
         )
-    return dict(zip(df["team"].astype(str), df["elo"].astype(int)))
+
+    df = df[list(expected)].copy()
+    df["team"] = df["team"].astype(str).str.strip()
+    df["group"] = df["group"].astype(str).str.strip().str.upper()
+    df["position"] = df["position"].astype(str).str.strip().str.upper()
+    df["elo"] = df["elo"].astype(int)
+    df["fifa_rank"] = df["fifa_rank"].astype(int)
+
+    if len(df) != 48 or not df["team"].is_unique:
+        raise ValueError(f"'{path}' must contain exactly 48 unique teams.")
+
+    expected_positions = {f"{group}{slot}" for group in GROUP_ORDER for slot in range(1, 5)}
+    actual_positions = set(df["position"])
+    if actual_positions != expected_positions:
+        missing = sorted(expected_positions - actual_positions)
+        extra = sorted(actual_positions - expected_positions)
+        raise ValueError(f"Official positions must be A1-L4. Missing={missing}; extra={extra}.")
+
+    if any(row.position[0] != row.group for row in df.itertuples()):
+        raise ValueError("Each row's `position` must start with its `group` letter.")
+
+    df["_slot"] = df["position"].str[1:].astype(int)
+    df = df.sort_values(["group", "_slot"]).drop(columns="_slot")
+    groups = {
+        group: df.loc[df["group"] == group, "team"].tolist()
+        for group in GROUP_ORDER
+    }
+    if any(len(teams) != 4 for teams in groups.values()):
+        raise ValueError("Each group A-L must contain exactly four teams.")
+
+    return {
+        "df": df.reset_index(drop=True),
+        "elos": dict(zip(df["team"], df["elo"])),
+        "fifa_ranks": dict(zip(df["team"], df["fifa_rank"])),
+        "groups": groups,
+        "teams": df["team"].tolist(),
+    }
 
 
-def make_groups(elos, n_groups=12):
-    '''Draw the 12 groups of 4 using a deterministic, seeded-by-strength method.
+def load_annex_c(path=None):
+    '''Load FIFA Regulations Annexe C third-place routing table.
 
-    Mimics FIFA's pot system: teams are ranked by Elo and split into 4 'pots'
-    of 12. Each group gets exactly one team from each pot. We assign pots in a
-    'snake' order (pot 1 left-to-right, pot 2 right-to-left, ...) so the groups
-    come out balanced. This is deterministic, so the draw is identical every run
-    and the bracket stays meaningful.
+    Rows are keyed by option number 1..495. Values map winner slots 1A, 1B,
+    1D, 1E, 1G, 1I, 1K, and 1L to the third-place group they face.
     '''
-    teams = sorted(elos, key=lambda t: elos[t], reverse=True)
-    pots = [teams[i * n_groups:(i + 1) * n_groups] for i in range(4)]
-    groups = [[] for _ in range(n_groups)]
-    for p, pot in enumerate(pots):
-        for gi, team in enumerate(pot):
-            idx = gi if p % 2 == 0 else (n_groups - 1 - gi)  # snake for balance
-            groups[idx].append(team)
-    return groups
+    path = path or os.path.join(DATA_DIR, "annex_c.csv")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Could not find '{path}'. Keep annex_c.csv in the data folder."
+        )
+    df = pd.read_csv(path)
+    expected = {"option", *[f"third_{col}" for col in ANNEX_COLUMNS]}
+    if not expected.issubset(df.columns):
+        raise ValueError(f"'{path}' must contain columns {sorted(expected)}.")
+
+    annex = {}
+    for row in df.itertuples(index=False):
+        option = int(getattr(row, "option"))
+        annex[option] = tuple(getattr(row, f"third_{col}") for col in ANNEX_COLUMNS)
+    if set(annex) != set(range(1, 496)):
+        raise ValueError("Annexe C must contain exactly options 1 through 495.")
+    return annex
 
 
-# Quick look at the field and the resulting draw
-_elos = load_teams()
-print(f"Loaded {len(_elos)} teams.\n")
-for gi, grp in enumerate(make_groups(_elos)):
-    label = chr(ord('A') + gi)
-    print(f"Group {label}: " + ", ".join(f"{t} ({_elos[t]})" for t in grp))
+# Quick look at the official field and draw
+_team_data = load_team_data()
+_annex_c = load_annex_c()
+print(f"Loaded {len(_team_data['teams'])} teams and {len(_annex_c)} Annexe C bracket options.\n")
+for label, grp in _team_data["groups"].items():
+    print(f"Group {label}: " + ", ".join(f"{t} ({_team_data['elos'][t]})" for t in grp))
 """)
 
 # ===========================================================================
@@ -364,22 +417,24 @@ Poisson scorelines.
 
 ### FIFA tiebreaker rules
 When teams finish level on points, FIFA breaks ties in this exact order:
-1. **Points** (overall)
-2. **Goal difference** (GF − GA, overall)
-3. **Goals scored** (GF, overall)
-4. **Head-to-head points** — only the matches *among the tied teams*
-5. **Head-to-head goal difference**
-6. **Drawing of lots** — pure random chance (we use a random number)
+1. **Head-to-head points** among the tied teams
+2. **Head-to-head goal difference**
+3. **Head-to-head goals scored**
+4. Re-apply those head-to-head rules to any remaining tied subset
+5. **Overall goal difference**
+6. **Overall goals scored**
+7. **Team conduct score** from yellow/red cards
+8. **FIFA/Coca-Cola Men's World Ranking**
 
-Our `rank_group` applies points/GD/GF first, then resolves any remaining ties
-with the head-to-head mini-table, and finally a random draw of lots. (This is a
-faithful, lightly simplified version of FIFA's full procedure.)
+This simulator does not model cards, so every team has a neutral conduct score
+of 0 and exact football ties fall through to the `fifa_rank` column in
+`data/teams.csv`.
 
 ### Choosing who advances
 - The **top 2 of every group** (24 teams) qualify automatically.
 - All **12 third-place teams** are then compared against each other (by points,
-  then GD, then GF) and the **best 8** also advance — giving 32 teams for the
-  Round of 32.
+  GD, GF, conduct score, then FIFA ranking) and the **best 8** also advance —
+  giving 32 teams for the Round of 32.
 
 ### Example: a finished group
 One simulated group might end up like this:
@@ -395,107 +450,188 @@ Spain and Mexico go through as the top two. Iran finishes third — **not out ye
 it competes with the other 11 third-placed teams for the 8 best-third spots. Iraq
 is eliminated.
 
-`get_qualifiers` returns the 32 survivors already **ordered as bracket seeds**
-(group winners first, then runners-up, then the best thirds), so stronger group
-performers are spread across the bracket.
+`get_qualifier_slots` returns the official bracket slots (`1A`, `2A`, `3A`, ...)
+plus the Annexe C third-place routing needed for the Round of 32.
 """)
 
 code(r"""
-def _break_h2h(tied, head_to_head):
-    '''Order teams that are tied on points/GD/GF using head-to-head results
-    among themselves, then a random drawing of lots.'''
-    h_pts = {t: 0 for t in tied}
-    h_gd = {t: 0 for t in tied}
-    for a in tied:
-        for b in tied:
-            if a == b:
-                continue
+def _partition_by_metric(teams, metric_fn, reverse=True):
+    '''Group teams by a tiebreak metric, preserving ranked metric order.'''
+    buckets = {}
+    for team in teams:
+        buckets.setdefault(metric_fn(team), []).append(team)
+    ranked_keys = sorted(buckets, reverse=reverse)
+    return [buckets[key] for key in ranked_keys]
+
+
+def _h2h_metrics(teams, head_to_head):
+    '''Return head-to-head points/GD/GF for the tied subset of teams.'''
+    metrics = {team: {"points": 0, "gd": 0, "gf": 0} for team in teams}
+    teams = list(teams)
+    for i, a in enumerate(teams):
+        for b in teams[i + 1:]:
             res = head_to_head.get((a, b)) or head_to_head.get((b, a))
             if res is None:
                 continue
-            # Express the result from team a's perspective
             if (a, b) in head_to_head:
-                ga, gb, outcome_a_first = res["goals_a"], res["goals_b"], True
+                goals_a, goals_b, a_first = res["goals_a"], res["goals_b"], True
             else:
-                ga, gb, outcome_a_first = res["goals_b"], res["goals_a"], False
-            h_gd[a] += ga - gb
+                goals_a, goals_b, a_first = res["goals_b"], res["goals_a"], False
+
+            metrics[a]["gf"] += goals_a
+            metrics[a]["gd"] += goals_a - goals_b
+            metrics[b]["gf"] += goals_b
+            metrics[b]["gd"] += goals_b - goals_a
+
             if res["outcome"] == "D":
-                h_pts[a] += 1
+                metrics[a]["points"] += 1
+                metrics[b]["points"] += 1
             else:
-                a_won = (res["outcome"] == "A") == outcome_a_first
-                if a_won:
-                    h_pts[a] += 3
-    return sorted(tied, key=lambda t: (h_pts[t], h_gd[t], random.random()), reverse=True)
+                a_won = (res["outcome"] == "A") == a_first
+                metrics[a if a_won else b]["points"] += 3
+    return metrics
 
 
-def rank_group(group, points, gf, ga, head_to_head):
-    '''Return group records [(team, points, gd, gf), ...] in finishing order,
-    applying the FIFA tiebreaker sequence.'''
-    gd = {t: gf[t] - ga[t] for t in group}
-    ordered = sorted(group, key=lambda t: (points[t], gd[t], gf[t]), reverse=True)
+def _rank_by_overall(teams, stats, fifa_ranks):
+    '''Apply FIFA step two/three: overall GD, GF, conduct, then FIFA rank.'''
+    groups = [list(teams)]
+    criteria = [
+        (lambda t: stats[t]["gd"], True),
+        (lambda t: stats[t]["gf"], True),
+        (lambda t: stats[t]["conduct_score"], True),
+        (lambda t: fifa_ranks[t], False),
+    ]
+    for metric_fn, reverse in criteria:
+        next_groups = []
+        for group in groups:
+            if len(group) == 1:
+                next_groups.append(group)
+            else:
+                next_groups.extend(_partition_by_metric(group, metric_fn, reverse=reverse))
+        groups = next_groups
+    ranked = []
+    for group in groups:
+        ranked.extend(sorted(group))
+    return ranked
 
-    # Resolve blocks that are still tied on (points, gd, gf) via head-to-head
-    final = []
-    i = 0
-    while i < len(ordered):
-        j = i
-        key_i = (points[ordered[i]], gd[ordered[i]], gf[ordered[i]])
-        while j < len(ordered) and (points[ordered[j]], gd[ordered[j]], gf[ordered[j]]) == key_i:
-            j += 1
-        block = ordered[i:j]
-        if len(block) > 1:
-            block = _break_h2h(block, head_to_head)
-        final.extend(block)
-        i = j
 
-    return [(t, points[t], gd[t], gf[t]) for t in final]
+def _rank_h2h_recursive(teams, stats, head_to_head, fifa_ranks):
+    '''Apply FIFA head-to-head criteria, reapplying to any still-tied subset.'''
+    metrics = _h2h_metrics(teams, head_to_head)
+    for key in ("points", "gd", "gf"):
+        partitions = _partition_by_metric(teams, lambda t, k=key: metrics[t][k], reverse=True)
+        if len(partitions) > 1:
+            ranked = []
+            for part in partitions:
+                if len(part) == 1:
+                    ranked.extend(part)
+                else:
+                    ranked.extend(_rank_h2h_recursive(part, stats, head_to_head, fifa_ranks))
+            return ranked
+    return _rank_by_overall(teams, stats, fifa_ranks)
 
 
-def simulate_group(group, elos):
-    '''Play all 6 round-robin matches in a group and return the ranked records.'''
-    points = {t: 0 for t in group}
-    gf = {t: 0 for t in group}
-    ga = {t: 0 for t in group}
+def rank_group(group_label, group, stats, head_to_head, fifa_ranks):
+    '''Return group records in official finishing order.'''
+    point_groups = _partition_by_metric(group, lambda t: stats[t]["points"], reverse=True)
+    ordered = []
+    for tied in point_groups:
+        if len(tied) == 1:
+            ordered.extend(tied)
+        else:
+            ordered.extend(_rank_h2h_recursive(tied, stats, head_to_head, fifa_ranks))
+
+    records = []
+    for position, team in enumerate(ordered, start=1):
+        rec = stats[team].copy()
+        rec["team"] = team
+        rec["group"] = group_label
+        rec["position"] = position
+        records.append(rec)
+    return records
+
+
+def simulate_group(group_label, group, elos, fifa_ranks):
+    '''Play the six official-position pairings in a group and rank the records.'''
+    stats = {
+        team: {
+            "points": 0,
+            "gf": 0,
+            "ga": 0,
+            "gd": 0,
+            "conduct_score": 0,  # Cards are not modeled; neutral for every team.
+            "fifa_rank": fifa_ranks[team],
+        }
+        for team in group
+    }
     head_to_head = {}
 
-    for i in range(len(group)):
-        for k in range(i + 1, len(group)):
-            a, b = group[i], group[k]
-            res = simulate_match(a, b, elos)
-            # League points from Layer 1 (outcome)
-            if res["outcome"] == "A":
-                points[a] += 3
-            elif res["outcome"] == "B":
-                points[b] += 3
-            else:
-                points[a] += 1
-                points[b] += 1
-            # Goals from Layer 2 (scoreline)
-            gf[a] += res["goals_a"]; ga[a] += res["goals_b"]
-            gf[b] += res["goals_b"]; ga[b] += res["goals_a"]
-            head_to_head[(a, b)] = res
+    for i, j in GROUP_MATCH_PAIRINGS:
+        a, b = group[i], group[j]
+        res = simulate_match(a, b, elos)
+        if res["outcome"] == "A":
+            stats[a]["points"] += 3
+        elif res["outcome"] == "B":
+            stats[b]["points"] += 3
+        else:
+            stats[a]["points"] += 1
+            stats[b]["points"] += 1
 
-    return rank_group(group, points, gf, ga, head_to_head)
+        stats[a]["gf"] += res["goals_a"]
+        stats[a]["ga"] += res["goals_b"]
+        stats[b]["gf"] += res["goals_b"]
+        stats[b]["ga"] += res["goals_a"]
+        stats[a]["gd"] = stats[a]["gf"] - stats[a]["ga"]
+        stats[b]["gd"] = stats[b]["gf"] - stats[b]["ga"]
+        head_to_head[(a, b)] = res
+
+    return rank_group(group_label, group, stats, head_to_head, fifa_ranks)
 
 
-def get_qualifiers(standings):
-    '''From all group standings, return the 32 qualifiers as an ordered list of
-    bracket seeds: group winners (best->worst), then runners-up, then the 8 best
-    third-placed teams.'''
-    winners, runners, thirds = [], [], []
-    for records in standings.values():
-        winners.append(records[0])
-        runners.append(records[1])
+def _third_place_sort_key(record):
+    '''Official ranking for third-placed teams across groups.'''
+    return (
+        -record["points"],
+        -record["gd"],
+        -record["gf"],
+        -record["conduct_score"],
+        record["fifa_rank"],
+        record["team"],
+    )
+
+
+def _third_place_option(qualifying_groups):
+    '''Return FIFA Annexe C option number for the eight qualifying third groups.'''
+    qualifying_groups = set(qualifying_groups)
+    excluded = tuple(group for group in GROUP_ORDER if group not in qualifying_groups)
+    option_lookup = {
+        combo: option
+        for option, combo in enumerate(combinations(GROUP_ORDER, 4), start=1)
+    }
+    return option_lookup[excluded]
+
+
+def get_qualifier_slots(standings, annex_c):
+    '''Return bracket slots and Annexe C routing for the 32 qualifiers.'''
+    slots = {}
+    qualifiers = []
+    thirds = []
+
+    for group_label in GROUP_ORDER:
+        records = standings[group_label]
+        slots[f"1{group_label}"] = records[0]["team"]
+        slots[f"2{group_label}"] = records[1]["team"]
+        slots[f"3{group_label}"] = records[2]["team"]
+        qualifiers.extend([records[0]["team"], records[1]["team"]])
         thirds.append(records[2])
 
-    # Sort tiers by (points, gd, gf); random tiebreak for exact ties
-    rank_key = lambda rec: (rec[1], rec[2], rec[3], random.random())
-    winners.sort(key=rank_key, reverse=True)
-    runners.sort(key=rank_key, reverse=True)
-    thirds.sort(key=rank_key, reverse=True)
+    best_thirds = sorted(thirds, key=_third_place_sort_key)[:8]
+    qualifiers.extend(record["team"] for record in best_thirds)
+    qualifying_groups = {record["group"] for record in best_thirds}
+    option = _third_place_option(qualifying_groups)
+    third_for_winner = dict(zip(ANNEX_COLUMNS, annex_c[option]))
 
-    seeded = winners + runners + thirds[:8]   # 12 + 12 + 8 = 32
-    return [rec[0] for rec in seeded]          # team names, seed order
+    return slots, third_for_winner, qualifiers, option
 """)
 
 # ===========================================================================
@@ -508,10 +644,17 @@ From the Round of 32 onward it is win-or-go-home. Each round halves the field:
 **32 → 16 → 8 (Quarterfinals) → 4 (Semifinals) → 2 (Final) → 1 (Winner)**.
 
 ### Building the bracket
-We place the 32 seeded qualifiers into a **standard tournament bracket** so that
-the top seeds are kept as far apart as possible (seed 1 and seed 2 can only meet
-in the final). `bracket_seed_order` produces the classic seeding pattern
-(1 vs 32, 16 vs 17, 8 vs 25, ...) used in real draws.
+The bracket follows the official FIFA Regulations match graph:
+
+- **Round of 32:** M73-M88 use group finish slots such as `1E`, `2A`, and the
+  Annexe C third-place assignments.
+- **Round of 16:** M89-M96 use the published winner pairings.
+- **Quarterfinals, semifinals, final:** M97-M104 follow the official route to the
+  trophy.
+
+The only dynamic part is the third-place routing. Once the eight qualifying
+third-place groups are known, `annex_c.csv` tells us which third-place team goes
+to each applicable winner slot.
 
 ### Penalty logic
 A knockout match cannot be drawn. We reuse `simulate_match`, which already
@@ -526,30 +669,85 @@ But 45% is real — and in this particular simulated run, Croatia hold their ner
 and knock Brazil out. Re-run the tournament and Brazil probably advance; that
 back-and-forth across thousands of runs is exactly what we are measuring.
 
-`simulate_knockout_round` takes the current list of teams (already in bracket
-order), plays adjacent pairs (0 vs 1, 2 vs 3, ...), and returns the winners — half
-as many teams, ready for the next round.
+`simulate_official_knockouts` resolves the official match graph and reports which
+teams reach each milestone.
 """)
 
 code(r"""
-def bracket_seed_order(n):
-    '''Return seeds 1..n arranged in standard single-elimination bracket order,
-    so higher seeds avoid each other until late rounds.'''
-    order = [1, 2]
-    while len(order) < n:
-        m = len(order) * 2 + 1
-        order = [x for s in order for x in (s, m - s)]
-    return order
+R32_MATCHES = [
+    (73, "2A", "2B"),
+    (74, "1E", "THIRD:1E"),
+    (75, "1F", "2C"),
+    (76, "1C", "2F"),
+    (77, "1I", "THIRD:1I"),
+    (78, "2E", "2I"),
+    (79, "1A", "THIRD:1A"),
+    (80, "1L", "THIRD:1L"),
+    (81, "1D", "THIRD:1D"),
+    (82, "1G", "THIRD:1G"),
+    (83, "2K", "2L"),
+    (84, "1H", "2J"),
+    (85, "1B", "THIRD:1B"),
+    (86, "1J", "2H"),
+    (87, "1K", "THIRD:1K"),
+    (88, "2D", "2G"),
+]
+
+R16_MATCHES = [
+    (89, 74, 77),
+    (90, 73, 75),
+    (91, 76, 78),
+    (92, 79, 80),
+    (93, 83, 84),
+    (94, 81, 82),
+    (95, 86, 88),
+    (96, 85, 87),
+]
+
+QF_MATCHES = [(97, 89, 90), (98, 93, 94), (99, 91, 92), (100, 95, 96)]
+SF_MATCHES = [(101, 97, 98), (102, 99, 100)]
+FINAL_MATCH = (104, 101, 102)
 
 
-def simulate_knockout_round(teams, elos):
-    '''Play one knockout round. `teams` is in bracket order; adjacent pairs meet.
-    Returns the list of winners (half the length).'''
-    winners = []
-    for i in range(0, len(teams), 2):
-        res = simulate_match(teams[i], teams[i + 1], elos)
-        winners.append(res["winner"])
-    return winners
+def _resolve_competitor(code, slots, third_for_winner):
+    '''Resolve a bracket code like 1A, 2B, or THIRD:1E to a team name.'''
+    if code.startswith("THIRD:"):
+        code = third_for_winner[code.split(":", 1)[1]]
+    return slots[code]
+
+
+def _play_match(match_no, team_a, team_b, elos):
+    res = simulate_match(team_a, team_b, elos)
+    return res["winner"]
+
+
+def simulate_official_knockouts(slots, third_for_winner, elos):
+    '''Play the official FIFA knockout match graph and return winners by stage.'''
+    winners = {}
+    stages = {"R16": [], "QF": [], "SF": [], "Final": [], "Winner": []}
+
+    for match_no, code_a, code_b in R32_MATCHES:
+        team_a = _resolve_competitor(code_a, slots, third_for_winner)
+        team_b = _resolve_competitor(code_b, slots, third_for_winner)
+        winners[match_no] = _play_match(match_no, team_a, team_b, elos)
+        stages["R16"].append(winners[match_no])
+
+    for match_no, a_prev, b_prev in R16_MATCHES:
+        winners[match_no] = _play_match(match_no, winners[a_prev], winners[b_prev], elos)
+        stages["QF"].append(winners[match_no])
+
+    for match_no, a_prev, b_prev in QF_MATCHES:
+        winners[match_no] = _play_match(match_no, winners[a_prev], winners[b_prev], elos)
+        stages["SF"].append(winners[match_no])
+
+    for match_no, a_prev, b_prev in SF_MATCHES:
+        winners[match_no] = _play_match(match_no, winners[a_prev], winners[b_prev], elos)
+        stages["Final"].append(winners[match_no])
+
+    match_no, a_prev, b_prev = FINAL_MATCH
+    winners[match_no] = _play_match(match_no, winners[a_prev], winners[b_prev], elos)
+    stages["Winner"].append(winners[match_no])
+    return stages
 """)
 
 # ===========================================================================
@@ -601,31 +799,28 @@ code(r"""
 STAGES = ["Group", "R32", "R16", "QF", "SF", "Final", "Winner"]
 
 
-def run_tournament(groups, elos):
+def run_tournament(groups, elos, fifa_ranks, annex_c):
     '''Play one complete tournament. Returns {team: furthest_stage_reached}.'''
     # Everyone starts as a group-stage exit; we upgrade as they advance.
-    reached = {team: "Group" for group in groups for team in group}
+    reached = {team: "Group" for group in groups.values() for team in group}
 
-    standings = {gi: simulate_group(group, elos) for gi, group in enumerate(groups)}
-    qualifiers = get_qualifiers(standings)          # 32 teams, in seed order
+    standings = {
+        label: simulate_group(label, group, elos, fifa_ranks)
+        for label, group in groups.items()
+    }
+    slots, third_for_winner, qualifiers, _option = get_qualifier_slots(standings, annex_c)
     for team in qualifiers:
         reached[team] = "R32"
 
-    # Place seeds into the bracket and play down to a single winner.
-    order = bracket_seed_order(32)
-    teams = [qualifiers[seed - 1] for seed in order]
-
-    winner_label = {32: "R16", 16: "QF", 8: "SF", 4: "Final", 2: "Winner"}
-    while len(teams) > 1:
-        label = winner_label[len(teams)]
-        teams = simulate_knockout_round(teams, elos)
-        for team in teams:
-            reached[team] = label
+    knockout_stages = simulate_official_knockouts(slots, third_for_winner, elos)
+    for stage in ["R16", "QF", "SF", "Final", "Winner"]:
+        for team in knockout_stages[stage]:
+            reached[team] = stage
 
     return reached
 
 
-def build_summary(counts, elos, n):
+def build_summary(counts, elos, fifa_ranks, n):
     '''Turn raw furthest-stage counts into a ranked probability table.
 
     For each team we compute the *cumulative* probability of reaching each stage
@@ -636,7 +831,7 @@ def build_summary(counts, elos, n):
 
     rows = []
     for team, stage_counts in counts.items():
-        row = {"Team": team, "Elo": elos[team]}
+        row = {"Team": team, "Elo": elos[team], "FIFA Rank": fifa_ranks[team]}
         for col in columns:
             start = STAGES.index(col_stage[col])
             reached_or_better = sum(stage_counts[s] for s in STAGES[start:])
@@ -645,8 +840,8 @@ def build_summary(counts, elos, n):
 
     df = pd.DataFrame(rows)
     df = df.sort_values(
-        ["Win Title", "Make Final", "Make SF", "Make QF", "Make R16", "Make R32", "Elo"],
-        ascending=False,
+        ["Win Title", "Make Final", "Make SF", "Make QF", "Make R16", "Make R32", "Elo", "FIFA Rank"],
+        ascending=[False, False, False, False, False, False, False, True],
     ).reset_index(drop=True)
     df.index = df.index + 1
     df.index.name = "Rank"
@@ -659,22 +854,27 @@ def run_simulation(n=N_RUNS, seed=42):
     np.random.seed(seed)
     random.seed(seed)
 
-    elos = load_teams()
-    groups = make_groups(elos)
-    all_teams = [t for g in groups for t in g]
+    team_data = load_team_data()
+    annex_c = load_annex_c()
+    elos = team_data["elos"]
+    fifa_ranks = team_data["fifa_ranks"]
+    groups = team_data["groups"]
+    all_teams = team_data["teams"]
     counts = {t: {s: 0 for s in STAGES} for t in all_teams}
 
     for _ in range(n):
-        for team, stage in run_tournament(groups, elos).items():
+        for team, stage in run_tournament(groups, elos, fifa_ranks, annex_c).items():
             counts[team][stage] += 1
 
-    summary, columns = build_summary(counts, elos, n)
+    summary, columns = build_summary(counts, elos, fifa_ranks, n)
     return {
         "summary": summary,
         "columns": columns,
         "counts": counts,
         "elos": elos,
+        "fifa_ranks": fifa_ranks,
         "groups": groups,
+        "annex_c": annex_c,
         "n": n,
         "seed": seed,
     }
