@@ -1,8 +1,10 @@
 # 2026 World Cup — Simulation Results
 
-**Run on:** Wednesday, June 3, 2026
-**What was run:** the whole 2026 World Cup, played out **100,000 times** by computer
-**Files in this folder:**
+### Run on: 
+Wednesday, June 3, 2026
+
+### What was run: 
+The whole 2026 World Cup, played out **100,000 times** by computer
 
 ---
 
