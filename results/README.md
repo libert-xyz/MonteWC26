@@ -101,43 +101,6 @@ the distance in these simulations.
 
 ![2026 World Cup bracket heatmap](wc2026_bracket.png)
 
-Think of it as a big scoreboard. **Each row is a team**, listed from the most
-likely champion (top) to the least likely (bottom).
-
-**Each column is a checkpoint** the team is trying to reach, getting harder as
-you move right:
-
-- **Make R32** → survive the group stage and reach the Round of 32
-- **Make R16** → reach the Round of 16 (last 16 teams)
-- **Make QF** → reach the Quarterfinals (last 8)
-- **Make SF** → reach the Semifinals (last 4)
-- **Make Final** → reach the Final (last 2)
-- **Win Title** → win the whole thing
-
-**Each colored box shows the percentage chance** that the team reaches *at least*
-that checkpoint. The color is just a quick visual cue for that number:
-
-- 🟢 **Green = very likely** (a high percentage)
-- 🟡 **Yellow = a coin flip** (around 50/50)
-- 🔴 **Red = unlikely** (a low percentage)
-
-**Two quick tricks for reading it:**
-
-1. **Read a row left-to-right** and the numbers only ever *shrink*. That's
-   expected — it's harder to reach the final than the quarterfinals, and harder
-   still to win it all. A team's row going from green to red shows where its
-   journey usually ends.
-2. **Scan a column top-to-bottom** to compare every team at one checkpoint. The
-   "Win Title" column on the far right is the headline: the green at the top fades
-   to deep red at the bottom, showing how the title race is concentrated among a
-   handful of teams.
-
-For example, Spain's row is almost entirely green and fades only at the very
-end — it nearly always advances deep, and wins the title 23.8% of the time. A
-team near the bottom, like Curacao, is green only in the first column (it
-sometimes escapes its group) and red everywhere after — it essentially never goes
-the distance in these simulations.
-
 ---
 
 ## The full results (all 48 teams)
