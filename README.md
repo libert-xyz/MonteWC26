@@ -8,12 +8,10 @@ If a team wins 1,900 out of 10,000 simulated tournaments, the model reports a
 19% title chance. That is the whole idea: many random tournament runs, counted
 up into probabilities.
 
-The project now uses the [confirmed 2026 field and official group draw](https://inside.fifa.com/organisation/news/groups-match-ups-revealed-game-changing-world-cup-2026),
+The project uses the [confirmed 2026 field and official group draw](https://inside.fifa.com/organisation/news/groups-match-ups-revealed-game-changing-world-cup-2026),
 FIFA group-stage tiebreaker order, and the
 [official knockout bracket routing](https://digitalhub.fifa.com/m/636f5c9c6f29771f/original/FWC2026_regulations_EN.pdf),
 including the 495 Annexe C third-place combinations.
-
-## Two Ideas In Plain English
 
 ### Monte Carlo
 
@@ -116,10 +114,17 @@ Both also display inside the notebook when you run it.
 
 ### Local Jupyter Or VS Code
 
-Install the three external libraries:
+Install the three external libraries (any recent release works; matplotlib must
+be 3.5 or newer for the `RdYlGn` colormap used by the heatmap):
 
 ```bash
 pip install numpy pandas matplotlib
+```
+
+Or install the pinned versions from the included file:
+
+```bash
+pip install -r requirements.txt
 ```
 
 Then open `WorldCup2026_MonteCarlo.ipynb` and run the cells from top to bottom.
@@ -235,14 +240,16 @@ structure unchanged.
 For each match, the simulator:
 
 1. Converts the Elo gap into win/loss chances.
-2. Reserves about 27% probability for a draw.
-3. Samples a scoreline from Poisson goal distributions.
+2. Reserves a draw share that starts near 27% for an even matchup and shrinks as
+   the Elo gap grows (lopsided games rarely finish level).
+3. Samples a scoreline from Poisson goal distributions, resampled so it agrees
+   with the result.
 4. In knockouts, resolves drawn outcomes by penalties, with the Elo favorite
    winning the shootout 55% of the time.
 
-The result and scoreline are sampled separately. That keeps the notebook easy to
-read, but it means a simulated points result and scoreline can occasionally
-disagree.
+The result is drawn first; the scoreline is then sampled to be consistent with
+it, so a simulated points result and its scoreline never disagree. Outcomes drive
+standings, scorelines drive tiebreakers, and the two always match.
 
 ### Group Stage
 
@@ -297,7 +304,8 @@ progression to major milestones and the title.
 - The Elo ratings are illustrative, not live official ratings.
 - The `fifa_rank` values are only a late FIFA tiebreaker, not match-strength
   inputs.
-- The match result and scoreline are sampled independently.
+- The scoreline is sampled to match the result; goals are still only a rough
+  Poisson approximation, not a detailed scoring model.
 
 Treat the output as: "given these ratings, this official draw, and this simplified
 match model, here is how often each outcome occurs."
@@ -310,3 +318,4 @@ match model, here is how often each outcome occurs."
 | `data/teams.csv` | Official field/draw plus editable ratings |
 | `data/annex_c.csv` | Official third-place routing table |
 | `build_notebook.py` | Regenerates the notebook from source cells |
+| `requirements.txt` | Pinned external library versions |

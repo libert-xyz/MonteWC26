@@ -91,6 +91,7 @@ environments. If any are missing (e.g. a bare Python install), uncomment the
 | **pandas** | Reads `data/teams.csv` and `data/annex_c.csv`, builds the final summary table, and exports it to CSV. |
 | **matplotlib** | Draws the bracket heatmap and saves it as a PNG. |
 | **random** | Python's built-in module, used for the simple coin-flip-style draws (match outcome thresholds and penalty shootouts). |
+| **math** | Python's built-in module, used for the gap-dependent draw share. |
 | **os** | Python's built-in module, used only to locate the `data/teams.csv` file. |
 | **itertools** | Python's built-in module, used to identify the correct Annexe C option. |
 
@@ -116,12 +117,12 @@ code(r"""
 # !pip install numpy pandas matplotlib
 
 import os
+import math
 import random
 from itertools import combinations
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib import colormaps
 from matplotlib.colors import Normalize
 
 # -------------------------------------------------------------------------
@@ -156,8 +157,8 @@ We use the standard Elo win-probability formula:
 
 $$P(\text{A beats B}) = \frac{1}{1 + 10^{(\text{Elo}_B - \text{Elo}_A) / 400}}$$
 
-**A quick example.** Argentina (2140) vs the USA (1770) is a 370-point gap.
-Plugging that in gives Argentina roughly a **89%** chance to win (before we make
+**A quick example.** Argentina (2113) vs the USA (1733) is a 380-point gap.
+Plugging that in gives Argentina roughly a **90%** chance to win (before we make
 room for draws — see the next section). Close the gap and it heads toward a coin
 flip; widen it and it becomes a mismatch.
 
@@ -227,14 +228,14 @@ def load_team_data(path=None):
             f"load_team_data(path='/your/path/teams.csv')."
         )
     df = pd.read_csv(path)
-    expected = {"team", "elo", "fifa_rank", "group", "position"}
-    if not expected.issubset(df.columns):
+    required = ["team", "elo", "fifa_rank", "group", "position"]
+    if not set(required).issubset(df.columns):
         raise ValueError(
-            f"'{path}' must contain columns {sorted(expected)}; "
+            f"'{path}' must contain columns {required}; "
             f"found {list(df.columns)}."
         )
 
-    df = df[list(expected)].copy()
+    df = df[required].copy()
     df["team"] = df["team"].astype(str).str.strip()
     df["group"] = df["group"].astype(str).str.strip().str.upper()
     df["position"] = df["position"].astype(str).str.strip().str.upper()
@@ -312,41 +313,48 @@ md(r"""
 ## 3. Match Simulation — the randomness model
 
 This is the heart of the simulation: given two teams and their Elo ratings, what
-happens when they play? We model randomness in **three independent layers**.
+happens when they play? We model randomness in **three layers**. The second layer
+is conditioned on the first, so the points result and the scoreline always agree.
 
 **Layer 1 — Match outcome (who gets the points).**
 First we turn the Elo gap into a win probability with the formula from Section 2.
-Real football has lots of draws, so we reserve a fixed **~27% chance of a draw**
-and split the remaining 73% between the two teams *in proportion to their Elo win
+Real football has lots of draws, so we reserve a **draw share** — about **27% for
+an even matchup**, shrinking as the Elo gap grows (lopsided games rarely finish
+level), following `draw_share = 0.27 · exp(-|Elo gap| / 500)`. The leftover
+probability is split between the two teams *in proportion to their Elo win
 probabilities*. We then draw a single random number and compare it against these
 cumulative thresholds to decide: home win / draw / away win. This decides the
 **3 / 1 / 0 league points** in the group stage.
 
 **Layer 2 — Scoreline (how many goals).**
-Separately, we sample each team's goal count from a **Poisson distribution** — the
-standard model for counting rare, independent events like goals. The average
-number of goals (`lambda`) is `1.5 ± elo_diff/400`: the stronger team gets the
-`+`, the weaker the `−`, floored at 0.5 so no team is impossible to score.
-These goals feed the **goal-difference and goals-scored tiebreakers**.
+We sample each team's goal count from a **Poisson distribution** — the standard
+model for counting rare events like goals. The average number of goals (`lambda`)
+is `1.5 ± elo_diff/400`: the stronger team gets the `+`, the weaker the `−`,
+floored at 0.5 so no team is impossible to score. Crucially, we **resample the
+scoreline until it agrees with the Layer 1 result** (a win is outscored, a draw is
+level), so the goals that feed the **goal-difference and goals-scored tiebreakers**
+never contradict who actually took the points.
 
-> **Note on the two-layer design:** points (Layer 1) and goals (Layer 2) are
-> drawn *independently*, so once in a while the points-outcome and the goal-count
-> may disagree (e.g. a "draw" for points with a 2–1 scoreline). This is a
-> deliberate simplification from the spec — outcomes drive standings, scorelines
-> drive tiebreakers — and it keeps each layer easy to reason about.
+> **Note on the two layers:** because the scoreline is conditioned on the result,
+> a "win" for points always comes with a winning scoreline and a "draw" with a
+> level one. Outcomes drive standings, scorelines drive tiebreakers, and the two
+> stay consistent. (A rare extreme upset that can't find a matching scoreline
+> within a few tries falls back to a minimal consistent one.)
 
 **Layer 3 — Penalties (knockout draws).**
 A knockout match can't end level. If Layer 1 produced a draw, we go to a shootout,
 modeled as a single biased coin flip: the **Elo favorite wins 55%** of shootouts,
-the underdog 45%.
+the underdog 45% (an even matchup is a true 50/50).
 
-### Worked example: Argentina (2140) vs USA (1770)
-1. **Result.** The 370-point gap gives Argentina ~89% to win a non-drawn game.
-   Reserve 27% for a draw and split the rest by strength, and one match lands near
-   **Argentina 65% / draw 27% / USA 8%.** We roll one random number to pick the
-   result — usually an Argentina win, but that 8% is how upsets sneak in.
-2. **Scoreline.** Separately, goals are sampled with averages of about **2.4 for
-   Argentina** and **0.6 for the USA**, so a typical roll might be **2–0**.
+### Worked example: Argentina (2113) vs USA (1733)
+1. **Result.** The 380-point gap gives Argentina ~90% to win a non-drawn game.
+   The draw share at this gap is about **13%** (down from 27% for an even game),
+   so one match lands near **Argentina 78% / draw 13% / USA 9%.** We roll one
+   random number to pick the result — usually an Argentina win, but that 9% is how
+   upsets sneak in.
+2. **Scoreline.** Goals are sampled with averages of about **2.5 for Argentina**
+   and **0.5 for the USA**, then re-rolled if needed so the scoreline matches the
+   result — so an Argentina win shows up as something like **2–0**.
 3. **Penalties (knockout only).** Had this been a knockout game ending level,
    Argentina (the favorite) would win the shootout 55% of the time.
 
@@ -355,20 +363,58 @@ goal counts, and a definitive `winner` (penalty-resolved) for knockout use.
 """)
 
 code(r"""
-def match_probabilities(elo_a, elo_b, draw_share=0.27):
+# Draw model: an even matchup ends level about DRAW_BASE of the time; that chance
+# shrinks as the Elo gap grows, since lopsided games rarely finish tied.
+DRAW_BASE = 0.27
+DRAW_SCALE = 500.0
+
+
+def match_probabilities(elo_a, elo_b, draw_base=DRAW_BASE, draw_scale=DRAW_SCALE):
     '''Return (P(A win), P(draw), P(B win)).
 
-    A fixed share of probability is given to a draw; the rest is split between
-    the teams in proportion to their Elo-based win probabilities.
+    The draw share starts at `draw_base` for an even matchup and decays as the
+    Elo gap widens (draw_share = draw_base * exp(-|gap| / draw_scale)). The
+    remaining probability is split between the teams in proportion to their
+    Elo-based win probabilities.
     '''
     p_a = 1.0 / (1.0 + 10 ** ((elo_b - elo_a) / 400.0))  # P(A beats B), no draws
+    draw_share = draw_base * math.exp(-abs(elo_a - elo_b) / draw_scale)
     remaining = 1.0 - draw_share
     return p_a * remaining, draw_share, (1.0 - p_a) * remaining
 
 
+def _consistent_scoreline(outcome, lambda_a, lambda_b, max_tries=20):
+    '''Sample (goals_a, goals_b) from the Poisson goal model, conditioned to
+    agree with the points outcome ("A" win, "B" win, or "D" draw).
+
+    We resample until the scoreline matches the result, so points and goals can
+    never contradict each other. The rare extreme upset that never matches within
+    `max_tries` falls back to a minimal consistent scoreline built from the last
+    draw, which keeps the goal magnitudes realistic.
+    '''
+    goals_a = goals_b = 0
+    for _ in range(max_tries):
+        goals_a = int(np.random.poisson(lambda_a))
+        goals_b = int(np.random.poisson(lambda_b))
+        if outcome == "A" and goals_a > goals_b:
+            return goals_a, goals_b
+        if outcome == "B" and goals_b > goals_a:
+            return goals_a, goals_b
+        if outcome == "D" and goals_a == goals_b:
+            return goals_a, goals_b
+    # Fallback: force consistency using the magnitudes we just drew.
+    hi, lo = max(goals_a, goals_b), min(goals_a, goals_b)
+    if outcome == "D":
+        return lo, lo
+    if hi == lo:
+        hi = lo + 1
+    return (hi, lo) if outcome == "A" else (lo, hi)
+
+
 def simulate_match(team_a, team_b, elos):
     '''Simulate one match. Returns a dict with the outcome, both scores, and a
-    penalty-resolved winner.'''
+    penalty-resolved winner. The scoreline is sampled to agree with the points
+    outcome, so the two never contradict each other.'''
     ea, eb = elos[team_a], elos[team_b]
 
     # --- Layer 1: outcome (decides league points) ---
@@ -381,7 +427,7 @@ def simulate_match(team_a, team_b, elos):
     else:
         outcome = "B"
 
-    # --- Layer 2: scoreline (decides tiebreakers), sampled independently ---
+    # --- Layer 2: scoreline (decides tiebreakers), made consistent with Layer 1 ---
     elo_diff = abs(ea - eb)
     strong_lambda = 1.5 + elo_diff / 400.0
     weak_lambda = max(0.5, 1.5 - elo_diff / 400.0)
@@ -389,16 +435,17 @@ def simulate_match(team_a, team_b, elos):
         lambda_a, lambda_b = strong_lambda, weak_lambda
     else:
         lambda_a, lambda_b = weak_lambda, strong_lambda
-    goals_a = int(np.random.poisson(lambda_a))
-    goals_b = int(np.random.poisson(lambda_b))
+    goals_a, goals_b = _consistent_scoreline(outcome, lambda_a, lambda_b)
 
     # --- Layer 3: definitive winner (penalties on a draw) ---
     if outcome == "A":
         winner = team_a
     elif outcome == "B":
         winner = team_b
+    elif ea == eb:
+        winner = team_a if random.random() < 0.5 else team_b  # even shootout
     else:
-        favorite, underdog = (team_a, team_b) if ea >= eb else (team_b, team_a)
+        favorite, underdog = (team_a, team_b) if ea > eb else (team_b, team_a)
         winner = favorite if random.random() < 0.55 else underdog
 
     return {"outcome": outcome, "goals_a": goals_a, "goals_b": goals_b, "winner": winner}
@@ -663,7 +710,7 @@ team wins the shootout 55% of the time**. So `simulate_match` always hands back 
 clean `winner` in knockout rounds.
 
 ### Example: penalties and an upset
-Picture a Round of 16 tie, **Brazil (2020) vs Croatia (1880)**. Brazil are
+Picture a Round of 16 tie, **Brazil (1988) vs Croatia (1908)**. Brazil are
 favorites, so if regulation ends **1–1** they win the shootout 55% of the time.
 But 45% is real — and in this particular simulated run, Croatia hold their nerve
 and knock Brazil out. Re-run the tournament and Brazil probably advance; that
@@ -919,7 +966,7 @@ def plot_bracket(results, top_n=None, save_path="wc2026_bracket.png"):
     teams = data["Team"].tolist()
     matrix = data[columns].to_numpy(dtype=float)
 
-    cmap = colormaps["RdYlGn"]          # red (low) -> yellow -> green (high)
+    cmap = plt.get_cmap("RdYlGn")       # red (low) -> yellow -> green (high)
     norm = Normalize(vmin=0, vmax=100)
 
     fig_h = max(4.0, 0.34 * len(teams) + 1.5)
