@@ -126,13 +126,18 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 
 # -------------------------------------------------------------------------
-# THE ONE CONFIGURABLE KNOB
-# Number of full-tournament simulations. See the note above for the tradeoff.
-# Try 1_000 for quick experiments; 10_000-50_000 for trustworthy results.
+# THE TWO CONFIGURABLE KNOBS
+# N_RUNS: number of full-tournament simulations. See the note above for the
+#         tradeoff. Try 1_000 for quick experiments; 10_000-50_000 for
+#         trustworthy results.
+# SEED:   starts the random "dice" from the same place so runs are repeatable.
+#         Keep it fixed for reproducible numbers; change it for a different but
+#         still repeatable set of runs; set it to None for fresh randomness.
 # -------------------------------------------------------------------------
 N_RUNS = 10_000
+SEED = 42
 
-print(f"Configured to run the tournament {N_RUNS:,} times.")
+print(f"Configured to run the tournament {N_RUNS:,} times (seed={SEED}).")
 """)
 
 # ===========================================================================
@@ -1007,7 +1012,7 @@ def plot_bracket(results, top_n=None, save_path="wc2026_bracket.png"):
 
 code(r"""
 # ---- Run the whole experiment ----
-results = run_simulation(N_RUNS, seed=42)
+results = run_simulation(N_RUNS, seed=SEED)
 
 # Draw and save the bracket heatmap
 plot_bracket(results)

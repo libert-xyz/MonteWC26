@@ -41,8 +41,7 @@ the tournament many times instead of just picking the highest-rated team.
 
 Elo started in chess, where ratings are updated after players win, lose, or draw.
 The same idea is now used in other places too: football rating sites, sports
-models, online games, and matchmaking systems. There is not one single universal
-Elo authority. Whoever maintains a rating list updates it using their own rules.
+models, online games, and matchmaking systems.
 For chess, that might be an official body such as FIDE. For international
 football, public Elo-style lists such as [World Football Elo Ratings](https://www.eloratings.net/)
 maintain their own numbers from match results.
@@ -102,6 +101,19 @@ The official tournament structure comes from FIFA sources:
 
 Both also display inside the notebook when you run it.
 
+## Latest Results
+
+A ready-made run lives in the [`results/`](results/) folder, so you can see the
+output without running anything yourself. It was generated from a **100,000-run**
+Monte Carlo (seed 42):
+
+- [`results/README.md`](results/README.md) — a friendly, no-stats-needed writeup
+  of what the run found and how to read it (start here).
+- [`results/wc2026_bracket.png`](results/wc2026_bracket.png) — the bracket heatmap.
+- [`results/wc2026_probabilities.csv`](results/wc2026_probabilities.csv) — the full
+  ranked table for all 48 teams.
+
+
 ## How To Run It
 
 ### Google Colab
@@ -143,6 +155,48 @@ That is how many full tournaments get simulated.
 - `1_000` is quick but noisy.
 - `10_000` is a reasonable default.
 - `50_000+` is smoother but slower.
+
+## Why Do I Get The Same Numbers Every Time?
+
+If you run the simulation twice, you will see the exact same percentages both
+times. That is on purpose. It is not a bug, and it does not mean the simulation
+forgot to be random.
+
+Here is the part that surprises people: **inside** the simulation, the tournament
+is full of surprises. Across the thousands of replays, favorites lose on
+penalties, underdogs go on deep runs, and big teams sometimes crash out early,
+exactly like a real World Cup. All of that drama really is happening on every run.
+
+So why do the final numbers come out the same each time? Because the computer's
+"dice" are told to start from the same place on every run.
+
+Think of it like a recording of someone rolling dice ten thousand times. The
+rolls themselves are all over the place; that is the randomness. But if you play
+that same recording again tomorrow, you see the same rolls in the same order, so
+you land on the same totals. This project presses "play" on the same recording
+every time. (The technical name for "start the dice from the same place" is a
+*fixed random seed*, but you do not need that term to use the project.)
+
+Why set it up this way?
+
+- **Trust.** Anyone who runs the project gets the same answer, so the numbers in
+  this README can be checked instead of taken on faith.
+- **Fair comparisons.** If you change a team's `elo` and the numbers move, you
+  know your change caused it, not a lucky or unlucky fresh roll of the dice.
+- **A steady scoreboard.** The percentages already include all the upsets and
+  surprises. Replaying with fresh dice would only nudge them by a few tenths of a
+  percent, which does not tell you anything new about the teams.
+
+In short: the unpredictability of football is already captured by replaying the
+whole tournament thousands of times. Keeping the dice fixed just gives you a
+clean, repeatable scoreboard instead of one that wiggles a little on every run.
+If you want the numbers to settle down even more, the better move is to raise
+`N_RUNS`, not to unfix the dice.
+
+> **For the curious (optional, not needed for normal use):** inside
+> `run_simulation`, the setting `seed=42` is what locks the dice. Changing that
+> number gives a different but still repeatable set of runs; removing it makes the
+> runs fresh and different every time. For everyday use, leave it as it is.
 
 ## Data Files
 
@@ -319,3 +373,4 @@ match model, here is how often each outcome occurs."
 | `data/annex_c.csv` | Official third-place routing table |
 | `build_notebook.py` | Regenerates the notebook from source cells |
 | `requirements.txt` | Pinned external library versions |
+| `results/` | A saved 100,000-run output: heatmap, ranked CSV, and a beginner-friendly writeup |
